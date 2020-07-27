@@ -1,0 +1,380 @@
+#!/usr/bin/env python
+# coding: utf-8
+
+# In[40]:
+
+
+import cv2
+import os
+import glob
+from PIL import Image
+import numpy as np
+import pickle
+
+
+# In[41]:
+
+
+def load_images(PATH):
+    i_list = []
+    for root, dirs, files in os.walk(PATH):
+        for file in files:
+            img = cv2.imread(root+"\\"+file)
+            image = cv2.resize(img,(24, 24))
+            grayImage = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            i_list.append(grayImage)
+    return i_list             
+
+
+# In[42]:
+
+
+images_list = load_images('originalPics')
+non_face_list = load_images('iccv09Data\images')
+print(len(images_list))
+print(len(non_face_list))
+
+
+# In[43]:
+
+
+def get_integral_image(image):
+    result_array = np.zeros(image.shape)
+    w = image.shape[0]
+    h = image.shape[1]
+    for i in range(w):
+        sum_ = 0
+        for j in range(h):
+            sum_ = sum_ + image[i,j]
+            if(i==0):
+                result_array[i,j] = sum_
+            else:
+                result_array[i,j] = result_array[i-1,j]+sum_
+                    
+    return np.pad(result_array, (1, 1), 'constant', constant_values=(0, 0))[:-1, :-1]
+
+
+# In[44]:
+
+
+def ii_list(i_list):
+    integral_list = []
+    for i in range(len(i_list)):
+        res = get_integral_image(i_list[i])
+        integral_list.append(res)
+    return integral_list
+
+
+# In[45]:
+
+
+integral_list = ii_list(images_list)
+non_face_int_list = ii_list(non_face_list)
+print(len(integral_list))
+print(len(non_face_int_list))
+
+
+# In[46]:
+
+
+with open("integral_im.pkl", 'wb') as f:
+    pickle.dump(integral_list,f)
+
+
+# In[47]:
+
+def get_sum(x1, y1, x2, y2, ii):
+    A = ii[y1, x1]
+    B = ii[y1, x2]
+    C = ii[y2, x1]
+    D = ii[y2, x2]
+    
+    return D+A-B-C
+
+
+# In[52]:
+
+
+class two_H:
+    def __init__(self, x, y, width, height):
+        self.x1 = x
+        self.x2 = x + width
+        self.y1 = y
+        self.y2 = y + height
+        self.x_middle = self.x1 + (self.x2 - self.x1) // 2
+
+    def get_feature(self, ii):
+        white = get_sum(self.x1, self.y1, self.x_middle, self.y2, ii) 
+        black = get_sum(self.x_middle, self.y1, self.x2, self.y2, ii) 
+        return white-black
+        
+
+
+# In[53]:
+
+
+class two_V:
+    
+    def __init__(self, x, y, width, height):
+        self.x1 = x
+        self.x2 = x + width
+        self.y1 = y
+        self.y2 = y + height
+        self.y_middle = self.y1 + (self.y2 - self.y1) // 2
+
+    def get_feature(self, ii):
+        white = get_sum(self.x1, self.y1, self.x2, self.y_middle, ii) 
+        black = get_sum(self.x1, self.y_middle, self.x2, self.y2, ii) 
+        return white-black
+        
+
+
+# In[54]:
+
+
+b = two_V(1,1,6,5)
+b.get_feature(integral_list[6])
+
+
+# In[56]:
+
+
+class three_H:
+    
+    def __init__(self, x, y, width, height):
+        self.x1 = x
+        self.x2 = x + width
+        self.y1 = y
+        self.y2 = y + height
+        self.x_first = self.x1 + (self.x2 - self.x1) // 3
+        self.x_second = self.x1 + 2 * (self.x2 - self.x1) // 3
+
+    def get_feature(self, ii):
+        white_1 = get_sum(self.x1, self.y1, self.x_first, self.y2, ii)
+        white_2 = get_sum(self.x_second, self.y1, self.x2, self.y2, ii)
+        black = get_sum(self.x_first, self.y1, self.x_second, self.y2, ii)
+        return white_1+white_2-black
+        
+
+
+# In[57]:
+
+
+class four_R:
+    
+    def __init__(self, x, y, width, height):
+        self.x1 = x
+        self.x2 = x + width
+        self.y1 = y
+        self.y2 = y + height
+        self.x_middle = self.x1 + (self.x2 - self.x1) // 2
+        self.y_middle = self.y1 + (self.y2 - self.y1) // 2
+
+    def get_feature(self, ii):
+        white_1 = get_sum(self.x1, self.y1, self.x_middle, self.y_middle, ii) 
+        white_2 = get_sum(self.x_middle, self.y_middle, self.x2, self.y2, ii)
+        black_1 = get_sum(self.x_middle, self.y1, self.x2, self.y_middle, ii)
+        black_2 = get_sum(self.x1, self.y_middle, self.x_middle, self.y2, ii)
+        return (white_1+white_2)-(black_1+black_2)
+
+
+# In[58]:
+
+
+b = four_R(1,1,6,5)
+b.get_feature(integral_list[6])
+
+
+# In[59]:
+
+
+def extract_features(Haar_shape,image_height,image_width,haar_d,ii):
+    f_list = []
+    for width in range(haar_d[0], image_width, haar_d[0]):
+        for height in range(haar_d[1], image_height, haar_d[1]):
+            for x in range(image_width - width):
+                for y in range(image_height - height):
+                    f = Haar_shape(x, y, width, height)
+                    f_list.append(f.get_feature(ii))
+    return f_list
+
+
+# In[60]:
+
+
+H_dim = (2, 1)
+V_dim = (1, 2)
+H3_dim = (3, 1)
+four_dim = (2, 2)
+
+
+# In[61]:
+
+
+train_set = integral_list + non_face_int_list
+
+
+# In[62]:
+
+
+img_labels = []
+for i in range(len(integral_list)):
+    img_labels.append(1)
+for i in range(len(non_face_int_list)):
+    img_labels.append(-1)
+f_length = len(integral_list)
+nf_length = len(non_face_int_list)
+
+
+# In[63]:
+
+
+len(img_labels)
+
+
+# TRAIN SET IS THE SET OF ALL FEATURES TO BE USED FOR TRAINING WITH ADABOOST
+
+# In[64]:
+
+
+def weak_classifier(feature,polarity=1,threshold=0):
+    h = 0
+    #print(feature)
+    if polarity*feature > polarity*threshold:
+        h = -1
+    else:
+        h = 1
+    return h
+
+
+# In[65]:
+
+
+def extract_f(each_img):
+    h=[]
+    a_list=[]
+    image_height, image_width = each_img.shape
+    s1 = extract_features(two_H,image_height, image_width,H_dim,each_img)
+    s2 = extract_features(two_V,image_height, image_width,V_dim,each_img)
+    s3 = extract_features(three_H,image_height, image_width,H3_dim,each_img)
+    s4 = extract_features(four_R,image_height, image_width,four_dim,each_img)
+    
+    for feat in range(len(s1)):
+        a = weak_classifier(s1[feat])
+        a_list.append(a)
+    for feat in range(len(s2)):
+        b = weak_classifier(s1[feat])
+        a_list.append(b)
+    for feat in range(len(s3)):
+        c = weak_classifier(s3[feat])
+        a_list.append(c)
+    for feat in range(len(s4)):
+        d = weak_classifier(s4[feat])   
+        a_list.append(d)
+    
+    #print(a_list)
+    minus_count = 0
+    one_count = 0
+    for i in a_list:
+        if i==-1:
+            minus_count+=1
+        else:
+            one_count+=1
+    #print(zero_count)
+    #print(one_count)
+    if minus_count>one_count:
+        return -1
+    else:
+        return 1
+
+
+# In[66]:
+
+
+def best_epsilon(weights,train_list,img_labels,polarity,threshold):
+    e_list = []
+    features = []
+    f_list = []
+    
+    h_min_values = []
+    h_list = []
+    final_h_list = []
+    
+    epsilon_l = []
+    i = 0
+    for image in train_list:
+        e = 0
+        
+        w = weights[i]  
+        y = img_labels[i]
+              
+        h_ = extract_f(image)
+        
+        epsilon = w * np.absolute(h_ - y)
+        epsilon_l.append(epsilon)
+        final_h_list.append(h_)
+        #print(i)
+        i+=1
+         
+    best_eps=np.min(epsilon_l)
+    print(np.min(epsilon_l))
+    h_index = epsilon_l.index(best_eps)
+    best_h = final_h_list[h_index]
+    
+    return best_eps,best_h,final_h_list
+
+
+# In[67]:
+
+
+def ada_boost(train_list,img_labels,polarity = 1, threshold = 0):
+    weights = []
+    value = 0
+    w_all = 0
+    epsilon=0
+    beta = 0
+    alpha = 0
+    update_factor = 0
+    for i in range(len(train_list)):
+        if i <= f_length:
+            value = 1/(2*f_length)
+            weights.append(value)
+        else:
+            value = 1/(2*nf_length)
+            weights.append(value)
+            
+    weights = np.array(weights)
+    #print(we
+    #print(np.shape(weights))
+    #print(np.max(weights))
+    #print(weights.shape)
+    w_all = np.sum(weights)
+    iterations = 2
+    w = 0
+    
+    alpha_list = []
+    for t in range(iterations):
+        weights = weights/weights.sum() 
+        epsilon,h,final_h_list = best_epsilon(weights,train_list,img_labels,polarity, threshold)    
+        beta = epsilon/(1-epsilon)
+        print(epsilon)
+        alpha = np.log(1/beta)
+        for i in range(len(img_labels)):
+            if final_h_list[i] - img_labels[i] == 0:
+                e=0
+            else:
+                e=1
+            weights[i] *= beta**(1-e) 
+        
+        alpha_list.append(alpha)
+    
+    return alpha_list,final_h_list
+          
+
+
+# In[68]:
+
+
+alpha_list,final_h_list = ada_boost(train_set,img_labels,polarity = 1, threshold = 0)
+
+
