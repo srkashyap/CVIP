@@ -1,0 +1,203 @@
+#!/usr/bin/env python
+# coding: utf-8
+
+# In[525]:
+
+
+import numpy as np
+from time import time
+import cv2
+import os
+import matplotlib.pyplot as plt
+import random 
+from scipy.spatial.distance import cdist
+
+
+# In[526]:
+
+
+#     READING ALL IMAGES 
+images = []
+g_img = []
+path = '..\data'
+for i in os.listdir(path):
+    if i.endswith('jpg'):
+        a = cv2.imread(os.path.join(path,i),cv2.IMREAD_UNCHANGED)
+#         a = cv2.resize(a,(640,480))
+        images.append(a)
+
+
+# In[527]:
+
+
+#       MAKING LIST OF KEYPOINTS AND DESCRIPTORS FOR ALL IMAGES
+keypoint = []
+descriptor = []
+sift = cv2.xfeatures2d.SIFT_create()
+for i in images:
+    k,d = sift.detectAndCompute(i,None)
+    keypoint.append(k)
+    descriptor.append(d)
+
+
+# #     VISUALIZING DESCCRIPTORS
+# for i in range(len(images)):
+#     cv2.imshow('original_image_left_keypoints',cv2.drawKeypoints(images[i],keypoint[i],None))
+#     cv2.waitKey(0)
+#     cv2.destroyAllWindows()
+
+# # MATCHING POINTS
+
+# In[531]:
+
+
+distances = cdist(descriptor[0],descriptor[1],'sqeuclidean')
+points = np.where(distances<2000)
+points_1 = points[0]
+points_2 = points[1]
+kp1,kp2 = [],[]
+k1 = keypoint[0]
+k2 = keypoint[1]
+for i in points_1:
+    kp1.append(k1[i].pt)
+for i in points_2:
+    kp2.append(k2[i].pt)
+good = []
+good = np.array([(kp1[i], kp2[i]) for i in range(0, len(kp1))])
+
+len(good)
+
+
+# #       Printing matching lines
+
+# 
+# draw = dict(matchColor = (0,255,0), # draw matches in green color
+#                    singlePointColor= -1)
+# match_image = cv2.drawMatches(images[0],keypoint[0],images[1],keypoint[1],good,2,**draw)
+# cv2.imshow("image_matches.jpg", match_image)
+# cv2.waitKey(0)
+# cv2.destroyAllWindows()
+
+# #    HOMOGRAPHY CV2
+
+# 
+# if len(good)>4:
+#     src   =  np.float32([(keypoint[0])[m.queryIdx].pt for m in good])
+#     dst   =  np.float32([(keypoint[1])[m.trainIdx].pt for m in good])
+#     M, mask = cv2.findHomography(dst, src, cv2.RANSAC,5.0)
+
+# #  HOMOGRAPHY CUSTOM
+
+# In[532]:
+
+
+def h_matrix(point):
+    X = []
+#     random.seed(143)
+    count = 0 
+    for i in point:
+        count += 1
+        x1 = i[0][0]
+        y1 = i[0][1]
+        x2 = i[1][0]
+        y2 = i[1][1]
+#         print(x1,y1,x2,y2)
+#         print(count)
+        a = [-x1, -y1, -1, 0, 0, 0, x1*x2, y1*x2, x2]
+        b = [0, 0, 0,  -x1, -y1,-1, x1*y2, y1*y2, y2]
+#         a = [0,0,0,-x1,-y1,-1,x1*y2,y1*y2,x1]
+#         b = [x1, y1, 1,  0, 0,0, -x1*x2, -y1*x2, -x2]    
+        X.append(a)
+        X.append(b)
+        break
+    X = np.array(X)
+#     print(X)
+    U, s, V = np.linalg.svd(X, full_matrices=True)
+    matrix = V[:, 8].reshape(3, 3)
+#     matrix = matrix/matrix[2,2]
+    return matrix
+
+
+# In[533]:
+
+
+def get_distance(correspondence, h):
+    correspondence = correspondence.reshape(-1,1)
+    point_1 = np.array([correspondence[0], correspondence[1],1])
+    estimated_pt2 = np.dot(h, point_1)
+    estimated_pt2 = (1/estimated_pt2.item(2))*estimated_pt2
+
+    point_2 = np.array([correspondence[2], correspondence[3],1])
+    
+    #Calculating error
+    diff_error = point_2 - estimated_pt2
+    
+    if(np.max(diff_error)!=0):
+        diff_error = diff_error/np.max(diff_error)
+    
+    #Returning normalized error
+    return np.linalg.norm(diff_error)
+
+
+# In[534]:
+
+
+def ransac(matches):
+    max_inliers = []
+    H = None
+    
+    #Iterating to obtain inliers and outliers
+    for i in range(1000):
+        H_list = []
+             
+        #looping through the correspondences to create matrix
+
+        for i in matches:
+            x1 = i[0][0]
+            y1 = i[0][1]
+            x2 = i[1][0]
+            y2 = i[1][1]
+            
+            a = [-x1, -y1, -1, 0, 0, 0, x1*x2, y1*x2, x2]
+            b = [0, 0, 0,  -x1, -y1,-1, x1*y2, y1*y2, y2]
+            
+            H_list.append(a)    
+            H_list.append(b)
+        
+        H_matrix = np.matrix(H_list)
+        u, s, v = np.linalg.svd(H_matrix)
+        h = np.reshape(v[8], (3, 3))
+        
+        h = (1/h.item(8)) * h
+        
+        inliers = []
+
+        for i in range(len(matches)):
+            d = get_distance(matches[i], h)
+            if d < 5:
+                inliers.append(matches[i])
+        
+        #Assigning for H
+        if len(inliers) > len(max_inliers):
+            max_inliers = inliers
+            H = h       
+        
+        if len(max_inliers) > (len(matches)*0.6):
+            break
+        
+    return H
+
+m = ransac(good)
+dst = cv2.warpPerspective(images[1],M,( images[0].shape[1] + images[1].shape[1] , images[1].shape[0]))
+dst[0:images[0].shape[0],0:images[0].shape[1]] = images[0]
+
+cv2.imwrite("panaroma111.jpg", dst)
+
+
+# In[ ]:
+
+
+
+
+
+# In[ ]
